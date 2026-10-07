@@ -38,6 +38,11 @@ class FakeDeezer:
     async def top_tracks(self, artist_id: int, limit: int = 5) -> list[DeezerTrack]:
         return [DeezerTrack(artist_id * 10, f"song {artist_id}", "prev.mp3", "alb", "c", "l", 200)]
 
+    async def track_preview(self, track_id: int) -> str:
+        if track_id % 10:
+            raise UpstreamError("deezer: no track")
+        return f"fresh-{track_id}.mp3"
+
     async def track_isrc(self, track_id: int) -> str | None:
         return f"ISRC{track_id}"
 

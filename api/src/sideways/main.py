@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -70,7 +70,8 @@ async def build_services(s: Settings) -> AsyncGenerator[Services]:
     cache = Cache(s.data_dir / "cache.db")
     headers = {"User-Agent": s.user_agent}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        deezer = Deezer(Upstream("deezer", client, cache, per_second=8))
+        # Deezer allows 50 requests per 5 s.
+        deezer = Deezer(Upstream("deezer", client, cache, per_second=9))
         lb = ListenBrainz(
             labs=Upstream("lb-labs", client, cache, per_second=3),
             api=Upstream("lb-api", client, cache, per_second=2),
@@ -112,9 +113,7 @@ def create_app(s: Settings = settings, factory=build_services) -> FastAPI:
     app = FastAPI(
         title="Sideways", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json"
     )
-    _register_api(app)
-    _register_spotify(app)
-    _register_spotify_data(app)
+    app.include_router(router)
     _mount_web(app, s)
     return app
 
@@ -124,6 +123,7 @@ def get_services(request: Request) -> Services:
 
 
 Svc = Annotated[Services, Depends(get_services)]
+router = APIRouter()
 
 
 def require_same_origin(request: Request, svc: Svc) -> None:
@@ -157,37 +157,45 @@ def _artist_out(a: DeezerArtist) -> ArtistOut:
     return ArtistOut(deezer_id=a.id, name=a.name, picture=a.picture, fans=a.fans)
 
 
-def _register_api(app: FastAPI) -> None:
-    @app.get("/api/config")
-    async def config(svc: Svc) -> dict:
-        return {
-            "spotify_login": svc.spotify_auth is not None,
-            "jev": svc.recommender.jev is not None,
-        }
+@router.get("/api/config")
+async def config(svc: Svc) -> dict:
+    return {
+        "spotify_login": svc.spotify_auth is not None,
+        "jev": svc.recommender.jev is not None,
+    }
 
-    @app.get("/api/artists/search")
-    async def search_artists(
-        svc: Svc, q: Annotated[str, Query(min_length=1, max_length=100)]
-    ) -> list[ArtistOut]:
-        try:
-            return [_artist_out(a) for a in await svc.deezer.search_artists(q)]
-        except UpstreamError as e:
-            raise HTTPException(502, "Artist search is unavailable right now.") from e
 
-    @app.post("/api/recommend", dependencies=[Depends(require_same_origin)])
-    async def recommend(body: RecommendIn, request: Request, svc: Svc) -> RecResult:
-        ip = request.client.host if request.client else "unknown"
-        if not svc.limiter.allow(ip):
-            raise HTTPException(429, "Too many requests. Wait a minute and try again.")
-        req = RecRequest(**body.model_dump())
-        try:
-            return await svc.recommender.recommend(req)
-        except NoSeedsError as e:
-            raise HTTPException(422, str(e)) from e
-        except UpstreamError as e:
-            raise HTTPException(
-                502, "A music data service is unavailable. Try again shortly."
-            ) from e
+@router.get("/api/artists/search")
+async def search_artists(
+    svc: Svc, q: Annotated[str, Query(min_length=1, max_length=100)]
+) -> list[ArtistOut]:
+    try:
+        return [_artist_out(a) for a in await svc.deezer.search_artists(q)]
+    except UpstreamError as e:
+        raise HTTPException(502, "Artist search is unavailable right now.") from e
+
+
+@router.get("/api/tracks/{track_id}/preview")
+async def track_preview(track_id: int, svc: Svc) -> dict:
+    """Fresh signed preview URL, for when a page outlives the one it was given."""
+    try:
+        return {"preview": await svc.deezer.track_preview(track_id)}
+    except UpstreamError as e:
+        raise HTTPException(502, "Preview unavailable right now.") from e
+
+
+@router.post("/api/recommend", dependencies=[Depends(require_same_origin)])
+async def recommend(body: RecommendIn, request: Request, svc: Svc) -> RecResult:
+    ip = request.client.host if request.client else "unknown"
+    if not svc.limiter.allow(ip):
+        raise HTTPException(429, "Too many requests. Wait a minute and try again.")
+    req = RecRequest(**body.model_dump())
+    try:
+        return await svc.recommender.recommend(req)
+    except NoSeedsError as e:
+        raise HTTPException(422, str(e)) from e
+    except UpstreamError as e:
+        raise HTTPException(502, "A music data service is unavailable. Try again shortly.") from e
 
 
 # ── Spotify ───────────────────────────────────────────────────────────
@@ -219,64 +227,65 @@ class PlaylistIn(BaseModel):
     tracks: list[PlaylistTrack] = Field(min_length=1, max_length=40)
 
 
-def _register_spotify(app: FastAPI) -> None:
-    @app.get("/api/spotify/login")
-    async def login(svc: Svc) -> RedirectResponse:
-        if svc.spotify_auth is None:
-            raise HTTPException(404, "Spotify login isn't enabled on this server.")
-        state = secrets.token_urlsafe(24)
-        verifier, challenge = pkce_pair()
-        svc.sessions.save_state(state, verifier)
-        resp = RedirectResponse(svc.spotify_auth.authorize_url(state, challenge))
-        _set_cookie(resp, svc.settings, STATE_COOKIE, state, max_age=600)
-        return resp
-
-    async def callback(request: Request, svc: Svc) -> RedirectResponse:
-        return await _finish_login(request, svc)
-
-    # v1 registered /callback as the redirect URI; keep it working.
-    app.add_api_route("/api/spotify/callback", callback, methods=["GET"])
-    app.add_api_route("/callback", callback, methods=["GET"], include_in_schema=False)
-
-    @app.post("/api/spotify/logout", dependencies=[Depends(require_same_origin)])
-    async def logout(request: Request, response: Response, svc: Svc) -> dict:
-        svc.sessions.delete(request.cookies.get(SESSION_COOKIE))
-        response.delete_cookie(SESSION_COOKIE, path="/")
-        return {"ok": True}
-
-    @app.get("/api/spotify/me")
-    async def me(request: Request, svc: Svc) -> dict:
-        return {"logged_in": svc.sessions.get(request.cookies.get(SESSION_COOKIE)) is not None}
+@router.get("/api/spotify/login")
+async def login(svc: Svc) -> RedirectResponse:
+    if svc.spotify_auth is None:
+        raise HTTPException(404, "Spotify login isn't enabled on this server.")
+    state = secrets.token_urlsafe(24)
+    verifier, challenge = pkce_pair()
+    svc.sessions.save_state(state, verifier)
+    resp = RedirectResponse(svc.spotify_auth.authorize_url(state, challenge))
+    _set_cookie(resp, svc.settings, STATE_COOKIE, state, max_age=600)
+    return resp
 
 
-def _register_spotify_data(app: FastAPI) -> None:
-    @app.get("/api/spotify/seeds")
-    async def spotify_seeds(request: Request, svc: Svc) -> dict:
-        user, raw = _spotify_user(request, svc)
-        try:
-            taste = await fetch_taste(user)
-        except UpstreamError as e:
-            raise HTTPException(502, "Spotify didn't respond. Try again shortly.") from e
-        finally:
-            _persist_refresh(svc, user, raw)
-        found = await asyncio.gather(
-            *(svc.deezer.find_artist(n) for n in taste.ranked[:SPOTIFY_CANDIDATE_SEEDS]),
-            return_exceptions=True,
-        )
-        seeds = [_artist_out(a) for a in found if isinstance(a, DeezerArtist)][:SPOTIFY_SEEDS]
-        return {"seeds": seeds, "known": taste.ranked[:KNOWN_NAMES_LIMIT]}
+async def callback(request: Request, svc: Svc) -> RedirectResponse:
+    return await _finish_login(request, svc)
 
-    @app.post("/api/spotify/playlist", dependencies=[Depends(require_same_origin)])
-    async def save_playlist(body: PlaylistIn, request: Request, svc: Svc) -> dict:
-        user, raw = _spotify_user(request, svc)
-        try:
-            return await _save_playlist(svc, user, body)
-        except UpstreamError as e:
-            raise HTTPException(
-                502, "Spotify didn't accept the playlist. Try again shortly."
-            ) from e
-        finally:
-            _persist_refresh(svc, user, raw)
+
+# v1 registered /callback as the redirect URI; keep it working.
+router.add_api_route("/api/spotify/callback", callback, methods=["GET"])
+router.add_api_route("/callback", callback, methods=["GET"], include_in_schema=False)
+
+
+@router.post("/api/spotify/logout", dependencies=[Depends(require_same_origin)])
+async def logout(request: Request, response: Response, svc: Svc) -> dict:
+    svc.sessions.delete(request.cookies.get(SESSION_COOKIE))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@router.get("/api/spotify/me")
+async def me(request: Request, svc: Svc) -> dict:
+    return {"logged_in": svc.sessions.get(request.cookies.get(SESSION_COOKIE)) is not None}
+
+
+@router.get("/api/spotify/seeds")
+async def spotify_seeds(request: Request, svc: Svc) -> dict:
+    user, raw = _spotify_user(request, svc)
+    try:
+        taste = await fetch_taste(user)
+    except UpstreamError as e:
+        raise HTTPException(502, "Spotify didn't respond. Try again shortly.") from e
+    finally:
+        _persist_refresh(svc, user, raw)
+    found = await asyncio.gather(
+        *(svc.deezer.find_artist(n) for n in taste.ranked[:SPOTIFY_CANDIDATE_SEEDS]),
+        return_exceptions=True,
+    )
+    seeds = [_artist_out(a) for a in found if isinstance(a, DeezerArtist)][:SPOTIFY_SEEDS]
+    return {"seeds": seeds, "known": taste.ranked[:KNOWN_NAMES_LIMIT]}
+
+
+@router.post("/api/spotify/playlist", dependencies=[Depends(require_same_origin)])
+async def save_playlist(body: PlaylistIn, request: Request, svc: Svc) -> dict:
+    user, raw = _spotify_user(request, svc)
+    try:
+        return await _save_playlist(svc, user, body)
+    except UpstreamError as e:
+        raise HTTPException(502, "Spotify didn't accept the playlist. Try again shortly.") from e
+    finally:
+        _persist_refresh(svc, user, raw)
 
 
 async def _finish_login(request: Request, svc: Svc) -> RedirectResponse:
@@ -289,7 +298,11 @@ async def _finish_login(request: Request, svc: Svc) -> RedirectResponse:
         return RedirectResponse(f"{target}?spotify=denied")
     cookie_state = request.cookies.get(STATE_COOKIE, "")
     verifier = svc.sessions.pop_state(state) if state else None
-    if not state or not secrets.compare_digest(state, cookie_state) or verifier is None:
+    if (
+        not state
+        or not secrets.compare_digest(state.encode(), cookie_state.encode())
+        or verifier is None
+    ):
         return RedirectResponse(f"{target}?spotify=expired")
     try:
         token = await svc.spotify_auth.exchange(params.get("code", ""), verifier)

@@ -27,9 +27,9 @@ log = logging.getLogger(__name__)
 SEED_WEIGHT = 1.0
 LIKED_WEIGHT = 0.6
 # Non-anchor artists whose own neighbors get fetched (second hop).
-EXPANSION_SIZE = 15
+EXPANSION_SIZE = 12
 # Candidates resolved to Deezer and scored after the walk.
-POOL_SIZE = 60
+POOL_SIZE = 48
 JEV_POOL_SIZE = 40
 
 
@@ -99,7 +99,13 @@ class Recommender:
         warnings: set[str] = set()
         graph = ArtistGraph()
         anchors = await self._add_anchors(graph, req, warnings)
-        await self._expand(graph, [*anchors.positive, *anchors.negative], warnings)
+        anchor_keys = [*anchors.positive, *anchors.negative]
+        # MusicBrainz allows 1 req/s, so Deezer neighbors are fetched while MBIDs resolve.
+        await asyncio.gather(
+            self._resolve_mbids(graph, anchor_keys, warnings),
+            *(self._expand_deezer(graph, k, warnings) for k in anchor_keys),
+        )
+        await asyncio.gather(*(self._expand_lb(graph, k, warnings) for k in anchor_keys))
 
         walk = walk_scores(graph, anchors.positive, anchors.negative)
         excluded = {*anchors.positive, *anchors.negative, *map(norm_name, req.exclude_names)}
@@ -107,10 +113,13 @@ class Recommender:
         await self._expand(graph, expansion, warnings)
         walk = walk_scores(graph, anchors.positive, anchors.negative)
 
-        pool = await self._resolve_pool(graph, _top(walk, excluded, POOL_SIZE), warnings)
-        anchor_ids = {graph.nodes[k].deezer_id for k in [*anchors.positive, *anchors.negative]}
+        candidates = _top(walk, excluded, POOL_SIZE)
+        pool, tags = await asyncio.gather(
+            self._resolve_pool(graph, candidates, warnings),
+            self._tags(graph, [*candidates, *anchors.positive], warnings),
+        )
+        anchor_ids = {graph.nodes[k].deezer_id for k in anchor_keys}
         pool = _dedupe_by_deezer(graph, pool, anchor_ids)
-        tags = await self._tags(graph, [*pool, *anchors.positive], warnings)
         explanations = {k: explain(graph, k, anchors.positive) for k in pool}
 
         scores = min_max(
@@ -174,7 +183,6 @@ class Recommender:
                 anchors.negative[key] = 1.0
         if not anchors.positive:
             raise NoSeedsError("None of the seed artists could be found.")
-        await self._resolve_mbids(graph, [*anchors.positive, *anchors.negative], warnings)
         return anchors
 
     async def _resolve_mbids(self, graph: ArtistGraph, keys: list[str], warnings: set[str]) -> None:
@@ -194,24 +202,34 @@ class Recommender:
         await asyncio.gather(*(self._expand_one(graph, k, warnings) for k in keys))
 
     async def _expand_one(self, graph: ArtistGraph, key: str, warnings: set[str]) -> None:
+        await asyncio.gather(
+            self._expand_deezer(graph, key, warnings), self._expand_lb(graph, key, warnings)
+        )
+
+    async def _expand_deezer(self, graph: ArtistGraph, key: str, warnings: set[str]) -> None:
         node = graph.nodes[key]
-        if node.deezer_id:
-            try:
-                related = await self.deezer.related(node.deezer_id)
-            except UpstreamError as e:
-                log.warning("Deezer related failed for %s: %s", node.name, e)
-                warnings.add("Deezer related-artist data was partly unavailable.")
-            else:
-                _add_deezer_edges(graph, key, related)
-        if node.mbid:
-            try:
-                similar = await self.lb.similar_artists(node.mbid)
-            except UpstreamError as e:
-                log.warning("ListenBrainz similar failed for %s: %s", node.name, e)
-                warnings.add("ListenBrainz similarity data was partly unavailable.")
-            else:
-                for s, w in zip(similar, score_weights([s.score for s in similar]), strict=True):
-                    graph.add_edge(key, graph.add_artist(s.name, mbid=s.mbid), "listenbrainz", w)
+        if not node.deezer_id:
+            return
+        try:
+            related = await self.deezer.related(node.deezer_id)
+        except UpstreamError as e:
+            log.warning("Deezer related failed for %s: %s", node.name, e)
+            warnings.add("Deezer related-artist data was partly unavailable.")
+        else:
+            _add_deezer_edges(graph, key, related)
+
+    async def _expand_lb(self, graph: ArtistGraph, key: str, warnings: set[str]) -> None:
+        node = graph.nodes[key]
+        if not node.mbid:
+            return
+        try:
+            similar = await self.lb.similar_artists(node.mbid)
+        except UpstreamError as e:
+            log.warning("ListenBrainz similar failed for %s: %s", node.name, e)
+            warnings.add("ListenBrainz similarity data was partly unavailable.")
+        else:
+            for s, w in zip(similar, score_weights([s.score for s in similar]), strict=True):
+                graph.add_edge(key, graph.add_artist(s.name, mbid=s.mbid), "listenbrainz", w)
 
     async def _resolve_pool(
         self, graph: ArtistGraph, keys: list[str], warnings: set[str]

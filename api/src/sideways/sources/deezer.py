@@ -8,6 +8,8 @@ from sideways.http import Upstream, UpstreamError
 from sideways.names import norm_name
 
 BASE = "https://api.deezer.com"
+# Preview URLs are signed and expire roughly 20-25 minutes after Deezer issues them.
+PREVIEW_TTL = 600
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,7 @@ class Deezer:
         return [DeezerArtist.parse(a) for a in data.get("data", [])]
 
     async def top_tracks(self, artist_id: int, limit: int = 5) -> list[DeezerTrack]:
-        data = await self._get(f"/artist/{artist_id}/top", {"limit": limit}, ttl=3 * DAY)
+        data = await self._get(f"/artist/{artist_id}/top", {"limit": limit}, ttl=PREVIEW_TTL)
         return [
             DeezerTrack(
                 id=int(t["id"]),
@@ -82,6 +84,10 @@ class Deezer:
             )
             for t in data.get("data", [])
         ]
+
+    async def track_preview(self, track_id: int) -> str:
+        data = await self._get(f"/track/{track_id}", ttl=PREVIEW_TTL)
+        return data.get("preview") or ""
 
     async def track_isrc(self, track_id: int) -> str | None:
         data = await self._get(f"/track/{track_id}", ttl=30 * DAY)

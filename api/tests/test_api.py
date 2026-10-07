@@ -110,6 +110,12 @@ def test_recommend_is_rate_limited_per_ip(client):
     assert codes == [200, 200, 200, 429]
 
 
+def test_track_preview_refresh(client):
+    assert client.get("/api/tracks/10/preview").json() == {"preview": "fresh-10.mp3"}
+    assert client.get("/api/tracks/11/preview").status_code == 502
+    assert client.get("/api/tracks/abc/preview").status_code == 422
+
+
 def test_spotify_routes_404_when_disabled(client):
     assert client.get("/api/spotify/login", follow_redirects=False).status_code == 404
     assert client.get("/api/spotify/seeds").status_code == 404
@@ -168,3 +174,11 @@ def test_web_app_fallback_serves_index_and_blocks_traversal(tmp_path):
         assert c.get("/favicon.svg").text == "<svg/>"
         assert "nope" not in c.get("/..%2Fsecret.txt").text
         assert c.get("/api/unknown").status_code == 404
+
+
+def test_oauth_callback_with_non_ascii_state_is_rejected_not_500(tmp_path):
+    with make_client(tmp_path, spotify=True) as c:
+        c.cookies.set(STATE_COOKIE, "abc")
+        resp = c.get("/callback?code=x&state=%C3%A9t%C3%A9", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/?spotify=expired"
