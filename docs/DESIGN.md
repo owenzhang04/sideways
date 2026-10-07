@@ -73,6 +73,19 @@ listening-session/radio mode, graph explorer view.
 the rest, record recall@20 of held-out seed (and its LB top-5 neighbors). Run graph-only vs
 graph+Jev once a key is available.
 
+## Evaluation results (2026-10-07)
+
+Leave-one-out result on 2026-10-07 (8 seed sets x 4 artists, top 20, slider at 0.5):
+
+| Similarity source | Held-out artist recovered | Mean rank when recovered |
+|---|---|---|
+| Deezer only | 20/32 (62%) | 6.8 |
+| ListenBrainz only | 22/32 (69%) | 3.8 |
+| Both, merged | 26/32 (81%) | 5.2 |
+
+32 trials is a small sample, and recall only shows the graph finds artists you already like,
+not that its new picks are good. Jev has not been evaluated (no API key yet).
+
 ## Known risks
 
 - ListenBrainz similar-artists is a "labs" endpoint; no SLA. Deezer-only fallback keeps the app working.

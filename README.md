@@ -83,6 +83,17 @@ cd api && uv run python scripts/eval_holdout.py
 cd api && uv run python scripts/warm_cache.py
 ```
 
+Leave-one-out result on 2026-10-07 (8 seed sets x 4 artists, top 20, slider at 0.5):
+
+| Similarity source | Held-out artist recovered | Mean rank when recovered |
+|---|---|---|
+| Deezer only | 20/32 (62%) | 6.8 |
+| ListenBrainz only | 22/32 (69%) | 3.8 |
+| Both, merged | 26/32 (81%) | 5.2 |
+
+32 trials is a small sample, and recall only shows the graph finds artists you already like,
+not that its new picks are good. Jev has not been evaluated (no API key yet).
+
 ## Known limits
 
 - **Cold requests are slow: about 20-25 s** for seed sets nobody has used before, mostly
