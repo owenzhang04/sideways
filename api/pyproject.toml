@@ -1,0 +1,51 @@
+[project]
+name = "sideways"
+version = "0.1.0"
+description = "Music recommendations one step sideways from what you already like"
+authors = [
+    { name = "Owen Zhang", email = "owenisevolving@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.142.2",
+    "httpx>=0.28.1",
+    "networkx>=3.7",
+    "numpy>=2.5.3",
+    "python-dotenv>=1.2.4",
+    "scipy>=1.18.1",
+    "typesafe-sdk>=0.7.2",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+sideways = "sideways.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "PLR0917", "RUF"]
+preview = true
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.pylint]
+max-positional-args = 5
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
