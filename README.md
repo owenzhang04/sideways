@@ -1,5 +1,7 @@
 # Sideways
 
+![Sideways: recommendations for Alvvays, Slowdive and Beach House](docs/preview.png)
+
 Music recommendations one step sideways from what you already like. Type in a few artists
 (or log in with Spotify), get a short ranked list of artists you don't know yet, each with a
 30-second preview and a one-line reason.
@@ -18,9 +20,10 @@ sources instead. Details: [`docs/DESIGN.md`](docs/DESIGN.md) and
 2. **Walk.** Personalized PageRank over that graph, starting from your seeds. Artists you
    keep become extra starting points; artists you skip run a negative walk that is subtracted.
 3. **Edit.** A familiar-to-adventurous slider tilts scores by Deezer fan count. MMR re-ranking
-   spreads out artists with overlapping MusicBrainz genre tags. Optionally, TypeSafe Jev scores
-   each candidate against your taste and a free-text request ("more upbeat, 90s"); it only
-   scores catalog artists, so it can't invent any.
+   spreads out artists with overlapping MusicBrainz genre tags. Optionally, a free-text request
+   ("more upbeat, 90s") re-ranks the top 40 with GLiClass, a local zero-shot classifier that
+   scores each candidate's name and genre tags against the request. It only scores artists the
+   graph already found, so it can't invent any.
 4. **Tracks.** Each pick gets its Deezer top track with a preview.
 
 ## Layout
@@ -62,7 +65,7 @@ All optional. Without any of these, the typed-artist flow works fully.
 | Variable | Purpose |
 |---|---|
 | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI` | Spotify login (the older `SPOTIPY_*` names also work). Redirect URI is `<origin>/api/spotify/callback`; `/callback` also works for the URI v1 registered. |
-| `TYPESAFE_API_KEY`, `JEV_MODEL` | Enables Jev re-ranking and the "Steer it" box. |
+| `STEER_MODEL` | Hugging Face model id for the "Steer it" box, e.g. `knowledgator/gliclass-base-v3.0`. Needs `uv sync --extra steer` (torch, ~750 MB model). The Docker image bakes this model in and sets it. |
 | `FRONTEND_URL` | Where OAuth returns the browser. `/` in production; `http://127.0.0.1:5173` with the dev server. |
 | `ALLOWED_ORIGINS` | Comma-separated origins allowed to POST. The redirect URI's origin is added automatically. |
 | `DATA_DIR` | SQLite cache and sessions. Default `./data`. |
@@ -92,7 +95,7 @@ Leave-one-out result on 2026-10-07 (8 seed sets x 4 artists, top 20, slider at 0
 | Both, merged | 26/32 (81%) | 5.2 |
 
 32 trials is a small sample, and recall only shows the graph finds artists you already like,
-not that its new picks are good. Jev has not been evaluated (no API key yet).
+not that its new picks are good. Steering has only been spot-checked on four requests, not evaluated.
 
 ## Known limits
 
