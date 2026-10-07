@@ -749,14 +749,14 @@ img {
 }
 
 .entry__fans,
-.entry__jev {
+.entry__steer {
   margin-left: 10px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-3);
 }
 
-.entry__jev {
+.entry__steer {
   color: var(--accent);
 }
 

@@ -59,7 +59,7 @@ def client(tmp_path):
 
 
 def test_config_reports_disabled_features(client):
-    assert client.get("/api/config").json() == {"spotify_login": False, "jev": False}
+    assert client.get("/api/config").json() == {"spotify_login": False, "steer": "off"}
 
 
 def test_artist_search_validates_query(client):

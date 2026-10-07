@@ -2,8 +2,7 @@ import pytest
 
 from sideways.engine.graph import ArtistGraph, rank_weights, score_weights
 from sideways.engine.rank import (
-    JevScores,
-    blend_jev,
+    blend_steer,
     explain,
     min_max,
     mmr,
@@ -100,11 +99,10 @@ def test_min_max_handles_empty_and_flat():
     assert min_max({"a": 3, "b": 3}) == {"a": 1.0, "b": 1.0}
 
 
-def test_jev_blend_rewards_matches_and_is_neutral_at_half():
-    assert blend_jev(0.5, None) == pytest.approx(0.5)
-    assert blend_jev(0.5, JevScores(0.5, 0.5)) == pytest.approx(0.5)
-    assert blend_jev(0.5, JevScores(0.5, 0.95)) > blend_jev(0.5, JevScores(0.95, None))
-    assert blend_jev(0.5, JevScores(0.1, 0.1)) < 0.5
+def test_steer_blend_is_neutral_at_half_and_can_overturn_a_lead():
+    assert blend_steer(0.5, None) == pytest.approx(0.5)
+    assert blend_steer(0.5, 0.5) == pytest.approx(0.5)
+    assert blend_steer(1.0, 0.0) < blend_steer(0.5, 1.0)
 
 
 def test_mmr_trades_score_for_tag_diversity():

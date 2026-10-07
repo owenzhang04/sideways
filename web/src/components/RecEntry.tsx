@@ -8,13 +8,13 @@ type Props = {
   rec: Rec
   index: number
   verdict: 'liked' | 'skipped' | null
-  showJev: boolean
+  showSteer: boolean
   onLike: () => void
   onSkip: () => void
   onUndo: () => void
 }
 
-export function RecEntry({ rec, index, verdict, showJev, onLike, onSkip, onUndo }: Props) {
+export function RecEntry({ rec, index, verdict, showSteer, onLike, onSkip, onUndo }: Props) {
   const player = usePlayer()
   const track = rec.track
   const isCurrent = track !== null && player.currentId === track.id
@@ -91,9 +91,9 @@ export function RecEntry({ rec, index, verdict, showJev, onLike, onSkip, onUndo 
               via {sourceLabel(rec.sources)}
             </span>
           )}
-          {showJev && rec.jev?.matches_steer != null && (
-            <span className="entry__jev" title="Jev's probability that this artist matches your request">
-              fits request {Math.round(rec.jev.matches_steer * 100)}%
+          {showSteer && rec.steer_match != null && (
+            <span className="entry__steer" title="GLiClass's estimate that this artist fits your request">
+              fits request {Math.round(rec.steer_match * 100)}%
             </span>
           )}
         </div>

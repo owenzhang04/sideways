@@ -13,12 +13,17 @@ dependencies = [
     "numpy>=2.5.3",
     "python-dotenv>=1.2.4",
     "scipy>=1.18.1",
-    "typesafe-sdk>=0.7.2",
     "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
 sideways = "sideways.cli:main"
+
+[project.optional-dependencies]
+steer = [
+    "gliclass>=0.1.20",
+    "torch>=2.14.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
@@ -26,6 +31,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.13.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "respx>=0.23.1",
@@ -49,3 +55,11 @@ max-positional-args = 5
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

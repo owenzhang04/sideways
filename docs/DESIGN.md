@@ -18,7 +18,7 @@ decisions: `docs/research/2026-10-07-rec-landscape.md`.
 | Tags | ListenBrainz batch artist metadata (MusicBrainz folksonomy) | Spotify genres come back empty |
 | Tracks / previews | Deezer artist top tracks (30s MP3 previews, cover art) | No auth, ~50 req / 5 s |
 | Ranking | Personalized PageRank over the merged similarity graph, popularity penalty, MMR diversity | Same core idea as v1, but on a graph that actually reaches beyond your library |
-| LLM | Optional TypeSafe Jev re-rank when `TYPESAFE_API_KEY` is set | Jev scores grounded candidates; it never names artists, so nothing is hallucinated |
+| Steering | Optional GLiClass zero-shot re-rank (`knowledgator/gliclass-base-v3.0`, local) when `STEER_MODEL` is set | Scores grounded candidates' name + tags against the request; it never names artists, so nothing is hallucinated. Replaced TypeSafe Jev on 2026-10-07: runs locally, no API key |
 | Stack | FastAPI (Python 3.14, uv) + React 19 / Vite / TypeScript | Python for networkx; TS for the interactive player UI |
 | State | Stateless API; seeds, likes, skips, slider live in the URL (+ localStorage) | Shareable links for free; no user DB |
 | Cache | SQLite key-value with TTL for every upstream response | Upstreams are slow (MusicBrainz 1 req/s) and free; be polite |
@@ -35,7 +35,7 @@ seeds (typed Deezer IDs, or Spotify-derived, weighted)
   ├─ PPR:    personalization = seed weights (+ liked recs); skipped recs run a negative PPR, subtracted
   ├─ score:  log(ppr) − adventurousness · β · log10(fans)   ; known artists removed
   ├─ tags:   ListenBrainz batch metadata for top candidates
-  ├─ Jev:    (optional) per candidate: fits_taste, matches_steer → blended into score
+  ├─ steer:  (optional) top 40 scored by GLiClass against the request → blended into score
   ├─ MMR:    diversity re-rank on tag Jaccard (λ = 0.75)
   └─ track:  Deezer top track per artist (preview, cover, ISRC)
 reason: top contributing seeds ("Alvvays and Slowdive point here") + shared tags
@@ -45,7 +45,7 @@ reason: top contributing seeds ("Alvvays and Slowdive point here") + shared tags
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/config` | Feature flags: `spotify_login`, `jev` |
+| GET | `/api/config` | Feature flags: `spotify_login`, `steer` (`ready`/`loading`/`failed`/`off`) |
 | GET | `/api/artists/search?q=` | Seed autocomplete (Deezer) |
 | POST | `/api/recommend` | `{seeds, liked, skipped, adventurousness, steer?, limit}` → ranked recs |
 | GET | `/api/spotify/login` · `/api/spotify/callback` | OAuth (PKCE), session cookie |
@@ -59,7 +59,7 @@ reason: top contributing seeds ("Alvvays and Slowdive point here") + shared tags
 - Display serif (Instrument Serif) for headlines and artist names; Newsreader for body; JetBrains Mono for numbers, ranks, timestamps.
 - Masthead with "issue no." derived from the seed set (same seeds → same issue number).
 - Each rec is a numbered entry: cover art, artist (big serif), track title in quotes, play button with 30s progress, liner-notes reason, tags, like/skip.
-- Controls in a slim rail: seed chips with add-box, familiar↔adventurous slider, steer box (only if Jev on), save-to-Spotify, copy link.
+- Controls in a slim rail: seed chips with add-box, familiar↔adventurous slider, steer box (only if steering is on), save-to-Spotify, copy link.
 - Mobile-first single column; two-column (controls rail + list) at ≥960px.
 
 ## Out of scope (v1 of the rebuild)
@@ -71,7 +71,7 @@ listening-session/radio mode, graph explorer view.
 
 `api/scripts/eval_holdout.py`: for a seed set, hold out one seed at a time, recommend from
 the rest, record recall@20 of held-out seed (and its LB top-5 neighbors). Run graph-only vs
-graph+Jev once a key is available.
+graph+steering on labeled requests.
 
 ## Evaluation results (2026-10-07)
 
@@ -84,7 +84,7 @@ Leave-one-out result on 2026-10-07 (8 seed sets x 4 artists, top 20, slider at 0
 | Both, merged | 26/32 (81%) | 5.2 |
 
 32 trials is a small sample, and recall only shows the graph finds artists you already like,
-not that its new picks are good. Jev has not been evaluated (no API key yet).
+not that its new picks are good. Steering has only been spot-checked on four requests, not evaluated.
 
 ## Known risks
 

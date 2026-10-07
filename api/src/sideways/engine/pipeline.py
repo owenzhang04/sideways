@@ -5,17 +5,16 @@ import logging
 from dataclasses import dataclass, field
 
 from sideways.engine.graph import ArtistGraph, Node, rank_weights, score_weights
-from sideways.engine.jev import Candidate, JevRanker
 from sideways.engine.rank import (
     Explanation,
-    JevScores,
-    blend_jev,
+    blend_steer,
     explain,
     min_max,
     mmr,
     popularity_adjusted,
     walk_scores,
 )
+from sideways.engine.steer import SteerCandidate, SteerScorer
 from sideways.http import UpstreamError
 from sideways.names import norm_name
 from sideways.sources.deezer import Deezer, DeezerArtist, DeezerTrack
@@ -30,7 +29,7 @@ LIKED_WEIGHT = 0.6
 EXPANSION_SIZE = 12
 # Candidates resolved to Deezer and scored after the walk.
 POOL_SIZE = 48
-JEV_POOL_SIZE = 40
+STEER_POOL_SIZE = 40
 
 
 class NoSeedsError(ValueError):
@@ -68,7 +67,7 @@ class Rec:
     sources: list[str]
     track: DeezerTrack | None
     walk: float
-    jev: JevScores | None
+    steer_match: float | None
 
 
 @dataclass
@@ -76,7 +75,7 @@ class RecResult:
     seeds: list[SeedOut]
     recs: list[Rec]
     warnings: list[str]
-    jev_used: bool
+    steered: bool
 
 
 @dataclass
@@ -88,12 +87,12 @@ class _Anchors:
 
 class Recommender:
     def __init__(
-        self, deezer: Deezer, lb: ListenBrainz, mb: MusicBrainz, jev: JevRanker | None = None
+        self, deezer: Deezer, lb: ListenBrainz, mb: MusicBrainz, steer: SteerScorer | None = None
     ) -> None:
         self.deezer = deezer
         self.lb = lb
         self.mb = mb
-        self.jev = jev
+        self.steer = steer
 
     async def recommend(self, req: RecRequest) -> RecResult:
         warnings: set[str] = set()
@@ -128,16 +127,8 @@ class Recommender:
                 for k in pool
             }
         )
-        jev = await self._jev(
-            graph,
-            anchors,
-            steer=req.steer,
-            scores=scores,
-            tags=tags,
-            explanations=explanations,
-            warnings=warnings,
-        )
-        scores = {k: blend_jev(v, jev.get(k)) for k, v in scores.items()}
+        steer = await self._steer(graph, req.steer, scores, tags, warnings)
+        scores = {k: blend_steer(v, steer.get(k)) for k, v in scores.items()}
 
         order = mmr(scores, {k: set(tags.get(k, [])) for k in pool}, req.limit)
         tracks = await self._tracks(graph, order, warnings)
@@ -150,11 +141,11 @@ class Recommender:
                 why=explanations[k],
                 track=tracks.get(k),
                 walk=walk[k],
-                jev=jev.get(k),
+                steer_match=steer.get(k),
             )
             for k in order
         ]
-        return RecResult(anchors.seeds, recs, sorted(warnings), bool(jev))
+        return RecResult(anchors.seeds, recs, sorted(warnings), steered=bool(steer))
 
     async def _add_anchors(
         self, graph: ArtistGraph, req: RecRequest, warnings: set[str]
@@ -262,29 +253,30 @@ class Recommender:
             return {}
         return {by_mbid[m]: t for m, t in tags.items() if m in by_mbid}
 
-    async def _jev(
+    async def _steer(
         self,
         graph: ArtistGraph,
-        anchors: _Anchors,
-        *,
-        steer: str,
+        request: str,
         scores: dict[str, float],
         tags: dict[str, list[str]],
-        explanations: dict[str, Explanation],
         warnings: set[str],
-    ) -> dict[str, JevScores]:
-        if self.jev is None:
+    ) -> dict[str, float]:
+        if self.steer is None or not request.strip():
             return {}
-        top = sorted(scores, key=lambda k: -scores[k])[:JEV_POOL_SIZE]
-        candidates = [
-            Candidate(k, graph.nodes[k].name, tags.get(k, []), explanations[k].because) for k in top
-        ]
-        loves = [graph.nodes[k].name for k in anchors.positive]
-        loved_tags = _common_tags(tags, list(anchors.positive))
-        result = await self.jev.score(loves, loved_tags, steer.strip(), candidates)
-        if candidates and not result:
-            warnings.add("Jev re-ranking was unavailable; showing graph ranking only.")
-        return result
+        if self.steer.status == "loading":
+            warnings.add("Steering is still warming up; this list ignores your request.")
+            return {}
+        if self.steer.status != "ready":
+            warnings.add("Steering is unavailable right now; this list ignores your request.")
+            return {}
+        top = sorted(scores, key=lambda k: -scores[k])[:STEER_POOL_SIZE]
+        candidates = [SteerCandidate(k, graph.nodes[k].name, tags.get(k, [])) for k in top]
+        try:
+            return await self.steer.score(request, candidates)
+        except Exception:
+            log.exception("Steering failed")
+            warnings.add("Steering failed; this list ignores your request.")
+            return {}
 
     async def _tracks(
         self, graph: ArtistGraph, keys: list[str], warnings: set[str]
@@ -332,14 +324,6 @@ def _dedupe_by_deezer(graph: ArtistGraph, keys: list[str], taken: set[int | None
     return out
 
 
-def _common_tags(tags: dict[str, list[str]], keys: list[str], n: int = 8) -> list[str]:
-    counts: dict[str, int] = {}
-    for key in keys:
-        for tag in tags.get(key, []):
-            counts[tag] = counts.get(tag, 0) + 1
-    return sorted(counts, key=lambda t: -counts[t])[:n]
-
-
 def _build_rec(
     node: Node,
     *,
@@ -348,7 +332,7 @@ def _build_rec(
     why: Explanation,
     track: DeezerTrack | None,
     walk: float,
-    jev: JevScores | None,
+    steer_match: float | None,
 ) -> Rec:
     return Rec(
         deezer_id=node.deezer_id or 0,
@@ -362,5 +346,5 @@ def _build_rec(
         sources=why.sources,
         track=track,
         walk=walk,
-        jev=jev,
+        steer_match=steer_match,
     )

@@ -1,4 +1,4 @@
-"""Ranking: personalized PageRank, popularity adjustment, Jev blending, MMR diversity."""
+"""Ranking: personalized PageRank, popularity adjustment, steering, MMR diversity."""
 
 import math
 from dataclasses import dataclass, field
@@ -12,8 +12,8 @@ DAMPING = 0.85
 NEGATIVE_FACTOR = 0.5
 # Score change per 10x fans at the ends of the familiar <-> adventurous slider.
 POPULARITY_BETA = 1.2
-JEV_TASTE_WEIGHT = 0.25
-JEV_STEER_WEIGHT = 0.6
+# Strong enough that a clear request can reorder the list, not just nudge it.
+STEER_WEIGHT = 0.6
 MMR_LAMBDA = 0.75
 _EPS = 1e-12
 
@@ -56,20 +56,11 @@ def min_max(values: dict[str, float]) -> dict[str, float]:
     return {k: (v - lo) / (hi - lo) for k, v in values.items()}
 
 
-@dataclass
-class JevScores:
-    fits_taste: float
-    matches_steer: float | None = None
-
-
-def blend_jev(base: float, jev: JevScores | None) -> float:
-    """base is a normalized score in [0, 1]; Jev probabilities shift it around 0.5."""
-    if jev is None:
+def blend_steer(base: float, match: float | None) -> float:
+    """base is a normalized score in [0, 1]; the steer match shifts it around 0.5."""
+    if match is None:
         return base
-    score = base + JEV_TASTE_WEIGHT * (jev.fits_taste - 0.5) * 2
-    if jev.matches_steer is not None:
-        score += JEV_STEER_WEIGHT * (jev.matches_steer - 0.5) * 2
-    return score
+    return base + STEER_WEIGHT * (match - 0.5) * 2
 
 
 def jaccard(a: set[str], b: set[str]) -> float:

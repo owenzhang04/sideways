@@ -60,7 +60,7 @@ async def trial(rec: Recommender, ids: dict[str, int], held: str, k: int) -> int
 
 
 async def main(k: int) -> None:
-    async with build_services(replace(settings, typesafe_api_key="")) as svc:
+    async with build_services(replace(settings, steer_model="")) as svc:
         base = svc.recommender
         variants = {
             "deezer only": Recommender(base.deezer, _NoSimilar(base.lb), base.mb),

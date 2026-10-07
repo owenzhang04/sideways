@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Artist } from '../api'
+import type { Artist, SteerStatus } from '../api'
 import type { Named } from '../storage'
 import { SeedPicker } from './SeedPicker'
 
@@ -9,7 +9,7 @@ type Props = {
   names: Record<number, Named>
   adv: number
   steer: string
-  jev: boolean
+  steerStatus: SteerStatus
   pending: number
   onAddSeed: (a: Artist) => void
   onRemoveSeed: (id: number) => void
@@ -20,7 +20,7 @@ type Props = {
 }
 
 export function Controls(props: Props) {
-  const { seeds, liked, names, adv, steer, jev, pending } = props
+  const { seeds, liked, names, adv, steer, pending } = props
   const [advDraft, setAdvDraft] = useState(adv)
   const [steerDraft, setSteerDraft] = useState(steer)
   const [synced, setSynced] = useState({ adv, steer })
@@ -81,7 +81,7 @@ export function Controls(props: Props) {
         </div>
       </section>
 
-      {jev && (
+      {props.steerStatus !== 'off' && props.steerStatus !== 'failed' && (
         <form
           className="controls__group"
           onSubmit={(e) => {
@@ -97,11 +97,15 @@ export function Controls(props: Props) {
             className="field"
             type="text"
             maxLength={200}
-            placeholder="e.g. more upbeat, women-fronted, 90s"
+            placeholder={props.steerStatus === 'loading' ? 'Warming up the model…' : 'e.g. upbeat, acoustic, 90s'}
+            disabled={props.steerStatus === 'loading'}
             value={steerDraft}
             onChange={(e) => setSteerDraft(e.target.value)}
           />
-          <p className="fineprint">Jev scores each pick against your words; it can't invent artists.</p>
+          <p className="fineprint">
+            A small classifier (GLiClass) scores each pick's genre tags against your words. It reorders
+            the list; it can't add artists.
+          </p>
         </form>
       )}
 

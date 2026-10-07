@@ -14,12 +14,11 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, 
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from typesafe_sdk import AsyncTypeSafeClient
 
 from sideways.cache import Cache
 from sideways.config import Settings, settings
-from sideways.engine.jev import JevRanker
 from sideways.engine.pipeline import NoSeedsError, Recommender, RecRequest, RecResult
+from sideways.engine.steer import GLiClassScorer
 from sideways.http import Upstream, UpstreamError
 from sideways.sessions import Sessions
 from sideways.sources.deezer import Deezer, DeezerArtist
@@ -77,8 +76,9 @@ async def build_services(s: Settings) -> AsyncGenerator[Services]:
             api=Upstream("lb-api", client, cache, per_second=2),
         )
         mb = MusicBrainz(Upstream("musicbrainz", client, cache, per_second=1))
-        jev_client = AsyncTypeSafeClient(api_key=s.typesafe_api_key) if s.jev_enabled else None
-        jev = JevRanker(jev_client, s.jev_model) if jev_client else None
+        steer = GLiClassScorer(s.steer_model) if s.steer_model else None
+        if steer:
+            steer.start_loading()
         auth = None
         if s.spotify_enabled:
             auth = SpotifyAuth(
@@ -91,15 +91,13 @@ async def build_services(s: Settings) -> AsyncGenerator[Services]:
             yield Services(
                 settings=s,
                 deezer=deezer,
-                recommender=Recommender(deezer, lb, mb, jev),
+                recommender=Recommender(deezer, lb, mb, steer),
                 sessions=Sessions(s.data_dir / "sessions.db"),
                 spotify_auth=auth,
                 spotify_api=Upstream("spotify", client, None, per_second=5) if auth else None,
                 limiter=IpLimiter(per_minute=20),
             )
         finally:
-            if jev_client:
-                await jev_client.aclose()
             cache.close()
 
 
@@ -161,7 +159,7 @@ def _artist_out(a: DeezerArtist) -> ArtistOut:
 async def config(svc: Svc) -> dict:
     return {
         "spotify_login": svc.spotify_auth is not None,
-        "jev": svc.recommender.jev is not None,
+        "steer": svc.recommender.steer.status if svc.recommender.steer else "off",
     }
 
 

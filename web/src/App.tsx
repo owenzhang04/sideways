@@ -26,7 +26,7 @@ const SPOTIFY_NOTICES: Record<string, string> = {
 
 export default function App() {
   const [params, update] = useUrlParams()
-  const [config, setConfig] = useState<Config>({ spotify_login: false, jev: false })
+  const [config, setConfig] = useState<Config>({ spotify_login: false, steer: 'off' })
   const [spotifyConnected, setSpotifyConnected] = useState(false)
   const [names, setNames] = useState(loadNames)
   const [result, setResult] = useState<RecResult | null>(null)
@@ -56,6 +56,13 @@ export default function App() {
       window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
     }
   }, [])
+
+  // The steering model loads after the server starts; check back until it settles.
+  useEffect(() => {
+    if (config.steer !== 'loading') return
+    const t = setInterval(() => api.config().then(setConfig, () => undefined), 5000)
+    return () => clearInterval(t)
+  }, [config.steer])
 
   useEffect(() => {
     if (config.spotify_login) api.spotifyMe().then((r) => setSpotifyConnected(r.logged_in), () => undefined)
@@ -208,7 +215,7 @@ export default function App() {
                 names={names}
                 adv={params.adv}
                 steer={params.steer}
-                jev={config.jev}
+                steerStatus={config.steer}
                 pending={pending}
                 onAddSeed={(a) => {
                   remember([a])
@@ -263,7 +270,7 @@ export default function App() {
                       rec={rec}
                       index={i + 1}
                       verdict={verdict(rec.deezer_id)}
-                      showJev={shown.jev_used && Boolean(params.steer)}
+                      showSteer={shown.steered}
                       onLike={() => setVerdict(rec.deezer_id, 'liked')}
                       onSkip={() => setVerdict(rec.deezer_id, 'skipped')}
                       onUndo={() => setVerdict(rec.deezer_id, null)}

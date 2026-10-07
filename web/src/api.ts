@@ -22,14 +22,16 @@ export type Rec = {
   sources: string[]
   track: Track | null
   walk: number
-  jev: { fits_taste: number; matches_steer: number | null } | null
+  steer_match: number | null
 }
 
 export type Seed = { deezer_id: number; name: string; picture: string }
 
-export type RecResult = { seeds: Seed[]; recs: Rec[]; warnings: string[]; jev_used: boolean }
+export type RecResult = { seeds: Seed[]; recs: Rec[]; warnings: string[]; steered: boolean }
 
-export type Config = { spotify_login: boolean; jev: boolean }
+export type SteerStatus = 'off' | 'loading' | 'ready' | 'failed'
+
+export type Config = { spotify_login: boolean; steer: SteerStatus }
 
 export type RecommendBody = {
   seeds: number[]

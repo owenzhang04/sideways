@@ -37,18 +37,14 @@ class Settings:
     spotify_client_secret: str
     spotify_redirect_uri: str
 
-    typesafe_api_key: str
-    jev_model: str
+    # Hugging Face model id for steering; empty disables it.
+    steer_model: str
 
     @property
     def spotify_enabled(self) -> bool:
         return bool(
             self.spotify_client_id and self.spotify_client_secret and self.spotify_redirect_uri
         )
-
-    @property
-    def jev_enabled(self) -> bool:
-        return bool(self.typesafe_api_key)
 
     @property
     def secure_cookies(self) -> bool:
@@ -78,8 +74,7 @@ def load_settings() -> Settings:
         spotify_client_id=_env("SPOTIFY_CLIENT_ID", "SPOTIPY_CLIENT_ID"),
         spotify_client_secret=_env("SPOTIFY_CLIENT_SECRET", "SPOTIPY_CLIENT_SECRET"),
         spotify_redirect_uri=redirect,
-        typesafe_api_key=_env("TYPESAFE_API_KEY"),
-        jev_model=_env("JEV_MODEL", default="jev-latest"),
+        steer_model=_env("STEER_MODEL"),
     )
 
 
