@@ -1,5 +1,9 @@
 # Spotify Recommender
 
+![Spotify Recommender in stub mode](docs/preview.png)
+
+*Stub mode with sample data: taste profile and genre-overlap recommendations.*
+
 A local web app that recommends music based on your Spotify listening
 profile. Pulls Liked Songs (most recent 20), your playlists, top artists,
 top tracks, and recently played; surfaces two parallel lists of recs:
