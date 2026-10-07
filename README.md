@@ -1,159 +1,98 @@
-# Spotify Recommender
+# Sideways
 
-A local web app that recommends music based on your Spotify listening
-profile. Pulls Liked Songs (most recent 20), your playlists, top artists,
-top tracks, and recently played; surfaces two parallel lists of recs:
-one based on genre overlap, one based on a co-occurrence graph run
-through Personalized PageRank.
+Music recommendations one step sideways from what you already like. Type in a few artists
+(or log in with Spotify), get a short ranked list of artists you don't know yet, each with a
+30-second preview and a one-line reason.
 
-## Quick start (stub mode — no Spotify account needed)
+This is a rebuild of an earlier "Spotify Recommender". That version relied on Spotify's
+related-artists, top-tracks, genre and popularity data, all of which Spotify has since removed
+for Development Mode apps (Nov 2024 and Mar 2026). Sideways gets similarity from open
+sources instead. Details: [`docs/DESIGN.md`](docs/DESIGN.md) and
+[`docs/research/2026-10-07-rec-landscape.md`](docs/research/2026-10-07-rec-landscape.md).
+
+## How it works
+
+1. **Neighbors.** For each seed artist: ListenBrainz session-based similar artists (who gets
+   played in the same listening sessions) and Deezer related artists. Edges both sources
+   agree on get extra weight.
+2. **Walk.** Personalized PageRank over that graph, starting from your seeds. Artists you
+   keep become extra starting points; artists you skip run a negative walk that is subtracted.
+3. **Edit.** A familiar-to-adventurous slider tilts scores by Deezer fan count. MMR re-ranking
+   spreads out artists with overlapping MusicBrainz genre tags. Optionally, TypeSafe Jev scores
+   each candidate against your taste and a free-text request ("more upbeat, 90s"); it only
+   scores catalog artists, so it can't invent any.
+4. **Tracks.** Each pick gets its Deezer top track with a preview.
+
+## Layout
+
+```
+api/   FastAPI + recommendation engine (Python 3.14, uv)
+web/   React 19 + Vite + TypeScript front end
+docs/  design doc and research notes
+Dockerfile  one container: builds web/, serves it from the API
+```
+
+## Run locally
 
 ```bash
-cd ~/Projects/spotify-rec
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-SPOTIPY_CLIENT_ID= python app.py
+# API (port 8000)
+cd api && uv sync && uv run sideways
+
+# Web dev server (port 5173, proxies /api to 8000), in another shell
+cd web && npm install && npm run dev
 ```
 
-Then visit http://127.0.0.1:8765 or whichever port uvicorn reports.
-You'll see fake data modeled after someone who likes indie / dream-pop / shoegaze.
-Use the `STUB MODE` badge to confirm you're in stub mode.
+Open http://127.0.0.1:5173. Use `127.0.0.1`, not `localhost`: the API's CSRF check
+allows `http://127.0.0.1:5173` and `http://127.0.0.1:8000` by default.
 
-## Quick start (live mode — your real Spotify data)
+To run the production build the way the container does: `cd web && npm run build`, then
+`cd api && uv run sideways` and open http://127.0.0.1:8000.
 
-### One-time setup (≈5 minutes)
-
-1. Visit https://developer.spotify.com/dashboard
-2. Click **Create app**
-   - Name: anything you like (`Spotify Rec (local)`)
-   - Description: one sentence is fine
-   - Redirect URI: **`http://127.0.0.1:8000/callback`** (must be explicit
-     loopback — Spotify rejects `localhost`)
-   - APIs: check **Web API** only
-3. Save. Copy **Client ID** and **Client Secret** from the app settings.
-4. **Important:** Open your app → **User Management** → enter your own
-   Spotify email → **Add user**. Without this the API returns stripped
-   payloads (empty genres, no popularity) because the app is in dev mode.
-   The UI shows a warning banner if this is missing.
-
-### Configure
+Or with Docker:
 
 ```bash
-cp .env.example .env
-# Edit .env and paste in your Client ID and Client Secret.
+docker build -t sideways .
+docker run -p 8000:8000 -v sideways-data:/data --env-file .env sideways
 ```
 
-### Run
+## Configuration
+
+All optional. Without any of these, the typed-artist flow works fully.
+
+| Variable | Purpose |
+|---|---|
+| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI` | Spotify login (the older `SPOTIPY_*` names also work). Redirect URI is `<origin>/api/spotify/callback`; `/callback` also works for the URI v1 registered. |
+| `TYPESAFE_API_KEY`, `JEV_MODEL` | Enables Jev re-ranking and the "Steer it" box. |
+| `FRONTEND_URL` | Where OAuth returns the browser. `/` in production; `http://127.0.0.1:5173` with the dev server. |
+| `ALLOWED_ORIGINS` | Comma-separated origins allowed to POST. The redirect URI's origin is added automatically. |
+| `DATA_DIR` | SQLite cache and sessions. Default `./data`. |
+
+Spotify notes: Development Mode apps need the app owner to have Premium, and only allowlisted
+accounts (up to 5 for new apps) can log in. Add accounts under the app's **User Management**
+in the Spotify dashboard. Everyone else uses typed seeds.
+
+## Tests and evaluation
 
 ```bash
-python app.py
+cd api && uv run pytest && uv run ruff check src tests scripts
+cd web && npm test && npx tsc -b && npx oxlint src
+
+# Leave-one-out recall on real data, per similarity source (slow on a cold cache)
+cd api && uv run python scripts/eval_holdout.py
+# Pre-fetch the landing page's example seed sets so the demo path is fast
+cd api && uv run python scripts/warm_cache.py
 ```
 
-Visit http://127.0.0.1:8000. First time:
-- Click **Connect Spotify** → log in → approve
-- The app stores a refresh token at `data/token.json` and pulls your data
+## Known limits
 
-Press **↻ Refresh** any time to re-pull and recompute (busts the cache).
+- **Cold requests are slow: about 20-25 s** for seed sets nobody has used before, mostly
+  ListenBrainz's similar-artists endpoint (0.6-3.3 s per call, rate limited). Cached
+  requests take 1-2 s; similarity is cached for 14 days.
+- ListenBrainz similar-artists is a "labs" endpoint with no uptime promise. If it fails,
+  results fall back to Deezer only, and the page says so.
+- Recommendations are about who listeners pair together, not how tracks sound. Spotify's
+  audio features are gone, and there's no audio-content model here.
+- Deezer artist matching is by exact name and highest fan count, so homonyms occasionally
+  resolve to the wrong artist.
 
-## What the recommendations are
-
-### List 1 — Genre sampling
-
-Your top 5 genres by weighted histogram across short/medium/long-term
-top artists. We pull a candidate artist pool and rank them by genre
-overlap with your taste axes, breaking ties by popularity.
-
-### List 2 — Artist co-occurrence graph (PageRank)
-
-Build an **artist–artist** graph where edges = "co-appear in the same
-playlist / liked / top-tracks set" (Liked Songs weighted higher). Bridge
-candidate artists in via related-artist and soft genre edges, then run
-Personalized PageRank seeded from your top + liked artists.
-New artists that sit near your listening neighborhood float to the top.
-
-Both algorithms share a candidate pool. Scores are lightly hybridized
-(`genre` / `relatedness` / `graph`) and the two lists are cross-deduped
-so the same artist doesn't appear in both columns.
-
-## Project layout
-
-```
-spotify-rec/
-├── app.py              # FastAPI server
-├── spotify_client.py   # Live + stub data fetching + data-quality helpers
-├── recommender.py      # Taste analysis + genre + artist PageRank
-├── bin/
-│   ├── smoke_test.py       # stub pipeline smoke test
-│   ├── check_live_data.py  # live User Management / playlist check
-│   └── eval_holdout.py     # tiny offline holdout eval
-├── templates/
-│   ├── index.html      # main page
-│   └── auth.html       # OAuth landing page
-├── static/
-│   └── style.css       # Spotify-ish dark theme
-├── data/               # runtime: token.json, spotify.json (cache)
-├── .env                # your secrets (gitignored)
-└── requirements.txt
-```
-
-## Caching
-
-- `data/spotify.json` — raw taste profile. TTL 24h by default; bust with
-  the **↻ Refresh** button or `POST /refresh`.
-- `data/token.json` — Spotify refresh token. Never expires unless revoked.
-- `data/recs.json` — currently unused (recommender runs on each request;
-  can cache if it gets slow).
-
-## Endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/` | Main page (recs + taste summary) |
-| `GET` | `/login` | Redirect to Spotify OAuth (live mode only) |
-| `GET` | `/callback` | OAuth callback |
-| `POST` | `/refresh` | Force-rebuild cache + recompute recs |
-| `GET` | `/healthz` | Sanity check (returns stub_mode + token status) |
-
-## Limitations
-
-- **No audio features.** Spotify's public audio-features and audio-analysis
-  endpoints were retired in late 2024. We can't analyze the *sound* of your
-  tracks (BPM, key, energy, etc.), only the metadata. Recs are therefore
-  more about *who* you listen to than *what those tracks sound like*.
-- **No explanations beyond a sentence.** LLM-generated explanations are
-  explicitly out of scope for v1.
-- **No "Save to playlist".** Spotify Web API requires write scope and an
-  approval flow we haven't built.
-- **No automatic refresh.** Cache invalidates by TTL or manual button click.
-- **No mobile layout.** Tested at desktop widths only.
-
-## Tech
-
-- Python 3.14
-- FastAPI + uvicorn
-- spotipy 2.x (Spotify Web API wrapper)
-- networkx (graph algorithms, including Personalized PageRank)
-- Jinja2 (templates)
-- python-dotenv (env config)
-
-## Tests / diagnostics
-
-```bash
-# Stub smoke test (no Spotify needed):
-SPOTIPY_CLIENT_ID= python bin/smoke_test.py
-
-# Regression unit tests (stdlib unittest; no pytest required):
-SPOTIPY_CLIENT_ID= python -m unittest tests.test_rec_fixes -v
-
-# Offline holdout eval (pipeline sanity; stub hit-rate is expected ~0):
-SPOTIPY_CLIENT_ID= python bin/eval_holdout.py
-
-# Live data quality (requires .env + OAuth token + User Management):
-python bin/check_live_data.py
-
-# Server health check:
-python app.py &  # in another shell
-curl http://127.0.0.1:8000/healthz
-# → ok, stub_mode, has_token, data_quality{genres_ok, playlists_ok, ...}
-```
+Data: ListenBrainz, MusicBrainz, Deezer. Not affiliated with Spotify or Deezer.
